@@ -1796,6 +1796,44 @@ func TestAccRDSCluster_port(t *testing.T) {
 	})
 }
 
+func TestAccRDSCluster_ClusterReplicationSource(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping long-running test in short mode")
+	}
+
+	resourceNamePrimary := "aws_db_instance.primary"
+	resourceNameReplica := "aws_rds_cluster.replica"
+	rNamePrimary := sdkacctest.RandomWithPrefix("tf-acc-test-primary")
+	rNameReplica := sdkacctest.RandomWithPrefix("tf-acc-test-replica")
+	rReplicationSourceIdentifier := fmt.Sprintf("%[1]s.arn", resourceNamePrimary)
+
+	var primaryDbInstance rds.DBInstance
+	var replicaDbCluster rds.DBCluster
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:          func() { acctest.PreCheck(t) },
+		ErrorCheck:        acctest.ErrorCheck(t, rds.EndpointsID),
+		ProviderFactories: acctest.ProviderFactories,
+		CheckDestroy:      testAccCheckClusterDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccClusterReplicationSource(rNamePrimary, rNameReplica, rReplicationSourceIdentifier),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckInstanceExists(resourceNamePrimary, &primaryDbInstance),
+					testAccCheckClusterExists(resourceNameReplica, &replicaDbCluster),
+				),
+			},
+			{
+				Config: testAccClusterReplicationSource(rNamePrimary, rNameReplica, "null"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckInstanceExists(resourceNamePrimary, &primaryDbInstance),
+					testAccCheckClusterExists(resourceNameReplica, &replicaDbCluster),
+				),
+			},
+		},
+	})
+}
+
 func TestAccRDSCluster_scaling(t *testing.T) {
 	ctx := acctest.Context(t)
 	if testing.Short() {
@@ -3636,6 +3674,50 @@ resource "aws_rds_cluster" "test" {
   skip_final_snapshot = true
 }
 `, rName, tfrds.ClusterEngineAuroraPostgreSQL, port)
+}
+
+func testAccClusterReplicationSource(rNamePrimary, rNameReplica, rReplicationSourceIdentifier string) string {
+	var extraResourceArgs string
+	if rReplicationSourceIdentifier == "null" {
+		extraResourceArgs = fmt.Sprintf(`
+  database_name                   = "mydb"
+  master_username                 = "foo"
+`)
+	} else {
+		extraResourceArgs = fmt.Sprintf(`
+  replication_source_identifier   = %[1]s
+`, rReplicationSourceIdentifier)
+
+	}
+	return fmt.Sprintf(`
+resource "aws_db_instance" "primary" {
+  identifier                      = "%[1]s"
+  instance_class                  = "db.t4g.medium"
+  db_name                         = "mydb"
+  engine                          = "%[2]s"
+  engine_version                  = 13.6
+  allocated_storage               = 10
+  password                        = "mustbeeightcharaters"
+  username                        = "foo"
+  skip_final_snapshot             = true
+  backup_retention_period         = 1
+}
+resource "aws_rds_cluster" "replica" {
+  cluster_identifier              = "%[3]s"
+  engine                          = "%[4]s"
+  engine_version                  = 13.6
+  skip_final_snapshot             = true
+%[5]s
+}
+resource "aws_rds_cluster_instance" "replica" {
+  identifier                      = "%[2]s"
+  cluster_identifier              = aws_rds_cluster.replica.id
+  instance_class                  = "db.t4g.medium"
+  engine                          = aws_rds_cluster.replica.engine
+  engine_version                  = aws_rds_cluster.replica.engine_version
+  publicly_accessible             = true
+}
+`, rNamePrimary, tfrds.InstanceEnginePostgres, rNameReplica, tfrds.ClusterEngineAuroraPostgreSQL, extraResourceArgs)
 }
 
 func testAccClusterConfig_includingIAMRoles(n int) string {

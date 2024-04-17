@@ -1420,6 +1420,28 @@ func resourceClusterUpdate(ctx context.Context, d *schema.ResourceData, meta int
 			input.PreferredMaintenanceWindow = aws.String(d.Get("preferred_maintenance_window").(string))
 		}
 
+		if d.HasChange("replication_source_identifier") {
+			if d.Get("replication_source_identifier").(string) == "" {
+				opts := rds.PromoteReadReplicaDBClusterInput{
+					DBClusterIdentifier: aws.String(d.Id()),
+				}
+				_, err := conn.PromoteReadReplicaDBCluster(&opts)
+				if err != nil {
+					return sdkdiag.AppendErrorf(diags, "promoting database RDS Cluster (%s): %s", d.Id(), err)
+				}
+
+				log.Printf("[INFO] Waiting for RDS Cluster (%s) to be available", d.Id())
+
+				if _, err := waitDBClusterUpdated(ctx, conn, d.Id(), d.Timeout(schema.TimeoutUpdate)); err != nil {
+					return sdkdiag.AppendErrorf(diags, "waiting for RDS Cluster (%s) to be available: %s", d.Id(), err)
+				}
+
+				d.Set("replication_source_identifier", "")
+			} else {
+				return sdkdiag.AppendErrorf(diags, "cannot elect new source database for replication (%s)", d.Id())
+			}
+		}
+
 		if d.HasChange("scaling_configuration") {
 			if v, ok := d.GetOk("scaling_configuration"); ok && len(v.([]interface{})) > 0 && v.([]interface{})[0] != nil {
 				input.ScalingConfiguration = expandScalingConfiguration(v.([]interface{})[0].(map[string]interface{}))
